@@ -1,0 +1,1605 @@
+---
+title: "Exploratory Data Analysis"
+author: "Shannon Coulter"
+date: "1/15/2022"
+output: html_document
+---
+# Exploratory Data Analysis
+
+*This guide is part 1 and will cover steps 1-3*
+
+1. *Gather datasets together*
+2. *Define columns*
+3. *Standardize measures* 
+4. Standardize your rows (part 2)
+5. Reshape data (part 2)
+6. Define the analytic sample (part 2)
+
+Depending on how much cleaning you have to do, you may need to do some steps in a different order, or repeat steps after others. For example, you may need to reshape your data again after you have cleaned up some of your columns and standardized them. Or, you may build an analytic sample and need to reshape your data then. But, once you have the techniques down you'll be able to apply them when and where you need. 
+
+The rest of this guide is organized to take you through these six steps using student-level assessment data - a common education data type. As you work through this guide and apply these techniques, draw parallels to the data you are cleaning for your project. 
+
+## Getting Started
+
+To get started, first save the tutorial file under a new name. 
+
+--> Choose "File > Save as..." under the RStudio window file menu, and replace the "XX" in the file name with your initials.
+	
+This will ensure that you won't overwrite the original tutorial file if you  decide to make edits and save them. Note that you can save files by pressing  Control/Cmd + S and you should do this regularly as you are working.  
+
+### Set Up
+
+Start the R session with a series of setup commands.
+
+```{r setup, message = FALSE, warning=FALSE}
+set.seed(24105)
+library(knitr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(here)
+library(tidyverse)
+opts_chunk$set(warning = FALSE, message = FALSE)
+options(width = 100)
+```
+
+The `set.seed()` function provides a seed for R's random number functions. You  can give it any integer value, and if someone uses the same integer value, their random number generator in R will produce the same results.It ensures that R will perform random actions, such as choosing a record sort  order when values are tied, in the same way each time functions are run. 
+
+The `library()` function loads any third-party libraries that you want to use.  For this tutorial we will use the `dplyr` library to provide access to powerful and intuitive data wrangling functions in R. If you do not have a library  installed, you can always install it using the `install.packages()` function, such as `install.packages("dplyr")`. 
+
+The `opts_chunk()` function controls the output of the R Markdown document when you compile it to HTML or PDF. 
+
+### Know the Context of Your Data
+
+The first step in data cleaning is knowing the context of the data. The data in this guide is student level assessment data extracted from the assessment table of the student information system in a large district. Coming from a student information system, the data is administrative data stored for summary reporting purposes and to power some of the dashboards the agency supports. The data is not intended to be consistent across years - most dashboards in this agency are annual only - and the agency has changed SIS vendors, meaning the historical data has moved databases one or more times. 
+
+These are the variables in the dataset: 
+
+- `reporting_year`: the year the assessment counts for, e.g. the second year of the XXXX-XXXX school year
+- `collection_code`: an abbreviation describing whether the data was loaded at the end of the year (EOY) or on the first day of school (FDS)
+- `extraction_date`: the date the data was extracted from the SIS
+- `student_id`: the numeric student unique identifier 
+- `test_id`: an abbreviation for the name/type of assessment given
+- `test_date`: the date the test was given
+- `score`: the score on the test
+- `ach_lvel`: the proficiency level reached on the test
+- `cscore`: a centered/scaled standardized score for the test
+- `cscore_err`: the measurement error around the standardized score for the test
+- `accomodation`: a code for whether the student was offered an accommodation for the test
+- `schid`: the numeric identifier for the school the student is assigned to 
+
+In addition to these student-level attributes, we have an extract of school level attributes we are hoping to analyze the data with:
+
+- `schid`: the numeric identifier for the school
+- `name`: the name of the school
+- `enroll`: the number of students enrolled in the school
+- `male_per`: the proportion of students enrolled who are male
+- `frpl_per`: the proportion of students enrolled who qualify for free or reduced price lunch
+- `sped_per`: the proportion of students enrolled with an individual education plan (IEP)
+- `lep_per`: the proportion of students enrolled who are English language learners
+- `gifted_per`: the proportion of students enrolled who are in gifted/talented services
+- `lea_id`: the identifier for the local education agency the school belongs to
+- `id_type`: the type of identifier the school identifier is (Local/State/National)
+- `title1a_status:`: character description of the type of Title 1 programs at the school
+- `title3_program_type`: character description of the type of Title 3 programs at the school
+- `type`: character description of the type of school
+- `poverty_desig`: character description of the school's qualitative poverty designation
+- `year`: the year the data was collected, the second year of the school year XXXX-XXXX
+
+Often when you clean a raw data file of data extracted from a student information system or other source, you review and clean each of the variables but keep the basic structure of the file the same. In the case of transactional data like test scores, though, there are extra steps before you can merge the data with other files into an analysis file. You will need to restrict the sample and restructure of the data.
+
+## Gather and Import the Data
+
+### Read in the Raw Data
+
+Raw data is the first challenge to data cleaning due to the sheer variety of data sources, data formats, and file types used. Because of this, we won't be able to cover all of them here - but rest assured that if it is data, there is a way to get it into R. Some of the most common data types and the R command (prefixed by any applicable package `pkg::fun()`) are listed below:
+
+- Excel spreadsheets `readxl::read_excel()`
+- Stata file `haven:read_dta()`
+- SPSS file `haven::read_spss()`
+- Relational Database `DBI::dbConnect()` or `odbc::dbReadTable()`
+- Text formats `readr::read_csv()` `readr::read_tsv()` `readr::read_fwf()` etc.
+
+You may also want to look at the `rio` package if you are importing data files of different formats frequently, as it implements a standard API which adjusts to read data in based on the file extension. 
+
+The most important thing to note here is that your script should read in the raw data, but you should *never overwrite the original data*. If you are going to be doing your work on a repeated basis, or you want to update your analysis with additional data files later, you need to write a script that can do this without overwriting or destroying the original data. 
+
+A common pattern is to read in data from annual reporting files of some kind. It is also not uncommon to find data elements at different levels of aggregation stored in different files, for example a file of student-level attributes and a separate file of school-level attributes. The first task of data cleaning then, is to get all of the data sets we need to analyze together and into our software of choice. 
+
+Let's practice this now. Often you will receive raw data in separate annual text files, in comma delimited format. That's the case here - we have two series of annual text files - `stu_test_YYYY` for student level assessment data and `sch_attr_YYYY` files for school attributes, stored as CSVs. 
+This is a common situation and there are [a number of methods for reading in and combining files like this in R.](https://stackoverflow.com/questions/11433432/how-to-import-multiple-csv-files-at-once) We'll start with a tried and true approach of using a for loop and some pattern matching. You can use other approaches, but we use the `for()` loop here because we can demonstrate what R is doing underneath making it clear how the software is completing this task.
+
+We've already put our data into the "data" directory, below our working directory. (Check out the Files pane in RStudio). We can get a list of files we need using the `list.files()` command in R. We can divide that list into school and student files using pattern matching via the `grep()` function.
+
+```{r dataimportloop}
+# Match the filenames that contain the words "stu_assess" and put the file names in a list
+stu_files <- grep("stu_assess",  # the pattern we want to match
+                  list.files(here("data"), full.names = TRUE), # a list of files in the data dir
+                  # including the path to these files
+                  value = TRUE) # when we match a pattern return the value of the matched pattern
+
+# Match the filenames that contain the words "sch_attr" and put the file names in a list
+sch_files <- grep("sch_attr", list.files(here("data"), full.names = TRUE), value = TRUE)
+
+# In R we can build two dataframes for now - a school and a student data frame. We use a separate 
+# loop for each. This is the loop for the student level files.
+# This is just one example of a loop that produces a single combined dataframe at the end
+for (i in seq_along(stu_files)) {
+  print(paste0("** reading in ", stu_files[i], "**"))
+  # Create the initial dataframe for the first file in the series
+  if (i == 1) {
+    stu_test <- read.csv(stu_files[i], stringsAsFactors = FALSE)
+  } else {
+    # For each subsequent file create a temporary file
+    tmp <- read.csv(stu_files[i], stringsAsFactors = FALSE, colClasses = "character")
+    # Combine the temporary file and the master file
+    stu_test <- rbind(stu_test, tmp)
+    rm(tmp) # not necessary, but removes the temporary file
+  }
+  # Report out how much data we read in
+  print(paste0("** total rows read in = ", nrow(stu_test), "**"))
+}
+
+# Confirm our reporting out with the row count for the final object
+nrow(stu_test) 
+```
+
+This form of iteration, a for loop, is powerful tool we can use to avoid repeating ourselves and making mistakes. We will be taking advantage of loops often as we clean our data to make our code compact and easy to edit and to avoid errors caused by copy and pasting. Many of the loops we use will be hidden by R and much of the syntax we use that follows are different ways of writing optimized and compact iterative code. 
+
+### Combine Multiple Files
+
+As an example, let's read in the school data now using a more compact representation of the same loop above:
+
+```{r dataimportloop2}
+# read the data into a list, a special object in R that can store many objects in one
+tmp <- lapply(sch_files, read.csv, colClasses = "character") 
+# for each dataframe in that list, bind them all together into one dataframe
+sch_attr <- do.call(rbind, tmp) 
+rm(tmp) # get rid of the list of dataframes
+# Look at the total rows produced
+nrow(sch_attr)
+```
+
+Notice that in this case, R is doing the same thing, but the syntax to express it is much more compressed. Compact syntax can be handy, but don't worry about finding the most compact syntax - use the syntax and code patterns that are the easiest for you to write and read for now. Only in edge cases with really large text files will you start to see a meaningful performance difference between these two approaches.
+
+> A note: this approach worked because we knew in advance that the columns of the data files would line up with one another. If one of the files had a different number of columns or if they columns were in a different order across files, we would need to do some additional cleaning to reorder the columns and ensure they line up, including using some additional R commands. If this is the case for you, look into the dplyr::bind_rows() function.
+
+### Identifying the Correct Data Type
+
+Note that above we read the text `csv` data into R without letting R do any data transformation or guesswork for us. Go ahead and open one of the CSV files in Excel and see how it renders the exact same data.
+
+Here we have told R not to guess what data type each column is - we want to verify that manually. To do so, we first read everything in as a "character" or "string" variable type - plain text. We can verify this worked with the following command: 
+
+```{r verifyobjecttypes}
+str(stu_test)
+str(sch_attr)
+```
+
+All of the columns in each dataset are stored as characters. If you know the source of your data well, you can skip this step and allow R to class the columns for you or manually specify the column classes when you read the data in. The reason we are not doing that here is that you can occasionally run into hard to diagnose data problems when you do this step - especially when working with unfamiliar data - so in this case we are going to work through our data and manually reclassify columns as we go. 
+
+### Join Datasets Together
+
+We now have two datasets, which we already know from our documentation are student and school level data files. We would like to combine them into one data file for analysis purposes. This is a common task where we need to bring data from two different datasets together. At this point, we need to only look at a few attributes of our datasets and identify which approach we wish to take to merge. You can learn more about the theory behind combining datasets, if you're interested, by reading up 
+on [relational algebra](https://en.wikipedia.org/wiki/Relational_algebra#Joins_and_join-like_operators).
+
+But, you don't need all of that to successfully merge your data and get on with your work. 
+
+- What is the name of the common identifier(s) in dataset X and dataset Y? (also known as the join key)
+- Do the identifiers in dataset X and dataset Y have a 1:1 relationship, a 1:many relationship, a many:1 relationship, or a many:many relationship? 
+- Which dataset, if any, is canonical and do we want to keep all the observations from?
+
+In this case, dataset X is the student data and dataset Y is the school data. In dataset X the identifier is `schid` and `reporting_year` and in the school data, dataset Y,  the identifiers are `schid` and `year`. We expect a many:1 relationship - many rows in the student dataset will be matched to a corresponding row in the school dataset. We also want to keep as many student records as we possibly can. 
+
+The `dplyr` package includes an easy set of merging commands that follow the same logic you may be familiar with from SQL: `inner_join()`, `left_join()`, `right_join()`, 
+`full_join()`. 
+
+- `inner_join(X, Y)` = retain only observations matched in dataset X and Y
+- `left_join(X, Y)` = retain all observations in X and only include observations in Y that match X
+- `right_join(X, Y)` = retain all observations in Y and only include observations in X that match Y
+- `full_join(X, Y)` = retain all observations in X and Y, fill NA for any values not matched between X and Y
+
+We can identify which join command we wish to use by looking at the join-keys and see how they overlap. For small datasets this isn't always necessary, but if you are working with large data it can be useful to evaluate the overlap in join-keys before attempting to join the data. 
+
+Let's review how we want to join our data. Let's call the student data dataset X and the school data dataset Y. We want to join X and Y using the common identifiers X(`schid` and `reporting_year`), y(`schid` and `year`). Let's explore those values in each dataset:
+
+```{r checkschoolkeys}
+# Dataset X, student data
+length(unique(stu_test$schid))
+table(stu_test$reporting_year)
+# Dataset Y, school data
+length(unique(sch_attr$schid))
+table(sch_attr$year)
+```
+
+We have 179 school IDs in the student data, but only 85 in the school data. We also see that we have multiple representations of year values in the student data. Let's take a closer look at what's going on.
+
+One way to do this is to work with all the key variables independently and test that elements in each of them match. Here's a code pattern you can use to do this: 
+
+```{r checkschoolkeys2}
+# Get unique school IDs in X
+school_x <- unique(stu_test$schid)
+# Get unique school IDs in Y
+school_y <- unique(sch_attr$schid)
+# Test that all unique schools in X appear in Y
+all(school_x %in% school_y)
+# Test that all unique schools in Y appear in X
+all(school_y %in% school_x)
+```
+
+All of the schools in X do not appear in Y, but all of the schools in Y appear in X.
+
+```{r checkyears}
+# Get unique keys for years in X
+year_x <- unique(stu_test$reporting_year)
+# Get unique keys for years in Y
+year_y <- unique(sch_attr$year)
+# Test that all keys in X appear in Y
+all(year_x %in% year_y)
+# Test that all keys in Y appear in X
+all(year_y %in% year_x)
+```
+
+So in both cases, the values in the student data include all the values in the school data, but not all of the values in the student data match the values in the school data. Let's try to fix that. The first thing we should do is look at the values that do not match. You can use the code pattern below to do this:
+
+```{r testyearkeys}
+# Get values in student data that are not in the school data
+year_x[!year_x %in% year_y]
+```
+
+Ah ha! The culprit is white space. Since our data is stored as characters, R has preserved the spacing. For some fields this is meaningful, but obviously for our year variable it is not. Let's remove it using `trimws()`, or "trim white space":
+
+```{r cleanyearkeys}
+stu_test$reporting_year <- trimws(stu_test$reporting_year)
+year_x <- unique(stu_test$reporting_year)
+all(year_x %in% year_y)
+```
+
+That worked! The trimmed fields all match for the reporting year variable. Now to the school IDs. 
+
+```{r checkschoolIDs}
+school_x[!school_x %in% school_y]
+school_y
+```
+
+We have a problem with leading 0s here. In our student and our school file the leading 0s are inconsistent leading to a mismatch. We could manually delete these, but an easier approach would be to ask R to interpret these variables both as numeric. We can look at the values and now we can be sure no data will be lost and the values of each variable will line up. 
+
+```{r clearleading0s}
+stu_test$schid <- as.numeric(stu_test$schid)
+sch_attr$schid <- as.numeric(sch_attr$schid)
+school_x <- unique(stu_test$schid)
+# Get unique school IDs in Y
+school_y <- unique(sch_attr$schid)
+# Test that all unique schools in X appear in Y
+all(school_x %in% school_y)
+# Test that all unique schools in Y appear in X
+all(school_y %in% school_x)
+
+```
+
+So now we have verified that there are no keys that don't match between our two datasets, which is great. This means that a `left_join()` using our student data as the "left" or "X" dataset will be fully equivalent to an `inner_join()` - because all the values in X match all the values in Y.You can verify this below:
+
+```{r lefjoinmerge}
+merge_dat <- dplyr::left_join(stu_test, sch_attr, by = c("reporting_year" = "year", 
+                                                    "schid" = "schid"))
+nrow(merge_dat) == nrow(stu_test)
+```
+
+```{r innerjoinmerge}
+merge_dat <- dplyr::inner_join(stu_test, sch_attr, by = c("reporting_year" = "year", 
+                                                    "schid" = "schid"))
+nrow(merge_dat) == nrow(stu_test)
+
+```
+
+Since it's all the same, let's merge the data and then only work with the merged data from there: 
+
+```{r finalmergecleanup}
+stu_test <- dplyr::inner_join(stu_test, sch_attr, by = c("reporting_year" = "year", 
+                                                    "schid" = "schid"))
+rm(merge_dat, sch_attr, school_x, school_y, year_x, year_y) # remove unneeded objects
+```
+
+Now we've gathered all of our data together. It's time to work through the columns in our data.
+
+## Define the Columns
+
+Defining our columns is all about giving them names we can work with, dropping columns we do not need, and making sure the data is stored as the right type of data based on what we expect and what we need for our analysis. 
+
+### Rename Variables
+
+Now, let's work with our columns. The first thing we want to do for our sanity is make variable names that are easy to remember and useful to us: 
+
+```{r chknames}
+names(stu_test)
+```
+
+Lucky for us, most of these variable names are pretty good, but let's look at options to rename them: 
+
+```{r renamevars}
+stu_test <- dplyr::rename(stu_test,
+            z_score = cscore, 
+            z_score_err = cscore_err, 
+            sch_type = type, 
+            sch_name = name
+)
+```
+
+The function `dplyr::rename()` works by returning our dataset with the new names. The first argument is the name of the dataset, and then you can simply type in the name you want, an equal sign, and the name of the variable you want to give this name. No messy quotations, no numeric indexes. It's very convenient to rename variables and document what the old names were right within your script. 
+
+Sometimes, though, you might want to rename many variables simultaneously. There are many tricks to working with variable names in R, but the most powerful is the `grep()` function we've already used for pattern matching. In this case, let's prefix all of the school enrollment percentage variables (`XXX_per`) with the `sch_` prefix, to help us keep in mind they are school level variables.
+
+```{r grepandpaste}
+# Match all the variables with the "_per" name
+per_vars <- grep("_per", names(stu_test))
+# For all the names of stu_test that are in the per_vars, give them a new name, which is now 
+# prefixed by "sch_"
+names(stu_test)[per_vars] <- paste0("sch_",names(stu_test)[per_vars])
+names(stu_test)
+```
+
+In this code we have used R's `paste0` function to create new variable names. `paste()` and `paste0()` are powerful functions that allow you to modify text variables or combine text variables together. They do this by doing what they say - in this case, for every element in `names(stu_test)[per_vars]` we paste the characters "sch_" to the front of the name. This way we can efficiently rename many many variables by doing the same command to ever element of the object we pass to `paste()`. 
+
+We forgot to add `sch_` to the front of `enroll`, so let's look at how we can change one variable:
+
+```{r renamesinglevar}
+# Reference it by its column position in the dataset
+names(stu_test)[14] <- "sch_enroll"
+```
+
+So, now we have given our variables sensible names. 
+
+### Drop and Sort Variables
+
+We also may wish to drop some variables at this point and reorder the remaining variables. For our analysis, we are not interested in any of the school category designations, but we are interested in the attributes of the student population. Here are a couple of ways we can drop variables:
+
+```{r singlevardrop}
+# Drop a single variable by assigning it NULL
+stu_test$poverty_desig <- NULL
+```
+
+We can use the `dplyr::select()` function to choose only the variables we want to retain and to control the order of our variables. This function allows us a lot of flexibility in the ways we describe our variables - one method is to refer to all the variables in a range by defining the first and last variable in a range. Let's look at an example where we wish to get rid of the last few variables at the end of our dataset which describe school status attributes we are not interested in for our analysis: 
+
+```{r trimunnecessarytrailingvars}
+stu_test <- stu_test %>% dplyr::select(reporting_year:sch_gifted_per)
+names(stu_test)
+```
+
+The `dplyr::select()` function only kept the variables from `reporting_year` to `sch_gifted_per`. We can use another approach with `dplyr::select()` to reorder our variables. Reordering variables does not impact how our analysis works, but it can make working with our data interactively easier. 
+In the code below `everything()` selects all the variables we haven't selected up to that point, saving us from typing out all of their names. 
+
+```{r reordervars}
+stu_test <- dplyr::select(stu_test, student_id, reporting_year, schid, test_id, 
+                            everything())
+names(stu_test)
+```
+
+Now we've put some of the more important identifier variables first. 
+
+> A note, when using 
+`dplyr::select()` be sure to call the function by its full name `pkg::function()` using 
+`dplyr::select()`. A large portion of R packages - particularly for statistical modeling - 
+rely on another package, the `MASS` package, which also includes a `select()` function. Loading 
+these two packages in the wrong order can cause problems in your code if you refer to the 
+function by its shorthand. To save you from having to debug this in case the packages get 
+loaded in the wrong order in your session.
+
+### Identify Duplicate or Irrelevant Variables
+
+Getting back to data cleaning, now that the variables are trimmed, it's possible to check and see if all the variables are necessary and meaningful. First check to see which years of data are included in the file, and then check the distribution of some of the variables that you suspect may be uninteresting. 
+
+```{r checkvars}
+table(stu_test$reporting_year, useNA = "always")
+table(stu_test$reporting_year, stu_test$collection_code, useNA = "always")
+table(stu_test$reporting_year, stu_test$extraction_date, useNA = "always")
+```
+
+The variables `collection_code` and `extraction_date` do not add additional detail beyond the `reporting_year` variable for our purposes (to analyze student annual test scores), they are constant within year, so it's okay to drop them.
+
+```{r dropduplicativevars}
+stu_test$collection_code <- NULL # collection code = FDS < 2010, EOY == 2010
+stu_test$extraction_date <- NULL 
+```
+
+So now we have our final set of variables we can turn our attention to cleaning them:
+
+```{r reviewnames}
+names(stu_test)
+```
+
+## Standardize Your Measures
+
+Now - a big part of our data cleaning is going to be making the columns, or measures, in our data have the right format and be consistent for analysis purposes. There are a number of standardizations we may need to make and we'll review some of the most common here. 
+
+Let's start at the beginning with our identifier variables - `student_id`, `reporting_year`, and `schid`. Cleaning identifier variables has special importance because they will be the foundation the rest of our data cleaning is built upon. So let's start with `student_id`. Our steps to clean this variable will be: 
+
+1. Check the variable type and if it can be numeric, make it numeric
+2. Check for missing data
+3. Check how many distinct values it has and how many rows it has in our data
+
+
+```{r basicsidchecks}
+# Our student ID is a character and we should check if it has whitespace issues
+# like our other character ID variables
+length(unique(stu_test$student_id)) == length(unique(trimws(stu_test$student_id)))
+# Since this is FALSE, we need to trim the whitespace first, then check unique values
+stu_test$student_id <- trimws(stu_test$student_id)
+str(stu_test$student_id)
+# Check unique values
+length(unique(stu_test$student_id))
+```
+
+Here we see that our variable looks fairly numeric and that we have over 52,000 unique student IDs in this dataset. Another critical question we want to look at is how many students we have per year and how many rows we have per student per year. 
+
+This code can help:
+
+```{r dplyrtablesummarysid}
+# Check unique values by year
+stu_test %>% group_by(reporting_year) %>% 
+  summarize(n_sid = n_distinct(student_id), 
+            nrow = n())
+```
+
+Here we are using the `dplyr` `%>%` (read: pipe) syntax. This is a powerful and flexible way to write R code that is particularly useful for the complex operations we need to use when cleaning data. You can think of the `%>%` operator (pronounced: pipe) as passing the results (or piping the results) of one function directly to the next function, without you needing to save it to a variable name in between. One advantage of `dplyr` for complex operations is that because each function we use in the `dplyr` package takes the data as the first argument, passed via the `%>%`, we can reference variable names without repeatedly typing `my_data$` in front of each variable.
+
+The main `dplyr` functions are called verbs. This code introduces two `dplyr` functions which do what they say. The first, `group_by()` allows us to group our data (as in SQL) and compute statistics by each group in the data. In this code, we group the data by `reporting_year`. Next, we have to declare what we want to do by group. In the case of `summarize()` we are going to calculate new variables for each group in the data and report the results out with one row per group. In other words, we are going to collapse the uniqueness of our dataset from `student_id` to `reporting_year`. Each row will have two measures now: `n_sid` which is the count of unique `student_id`s in that year and `nrow` which is the total number of rows for that year. Dividing these two values will tell us the average number of rows per student. 
+
+We see that most students have a little over 2 tests per year in our data most years, but there is variation across the years.
+
+Finally, let's rename `student_id` since we will be typing it so often - let's call it `sid`. 
+
+```{r renamesid}
+# Rename to sid to save ourselves some typing
+stu_test <- rename(stu_test, 
+                   sid = student_id)
+```
+
+
+Next let's clean up the `reporting_year` variable. We are going to change the name of this variable to something with more meaning to us: `school_year`. According to the person who pulled the data for you, this corresponds to school year (using the convention that the school year is referred to by the calendar year of the spring semester). You'll verify this is true for the tests you are interested in after you have cleaned the test date variable and can compare test year and school year. School year will be one of the key variables of your cleaned data file, so it is good that there are no missing values.
+
+
+```{r coercereportingyeartonum}
+table(stu_test$reporting_year, useNA = "always")
+# We can safely conver this numeric because all of the values are valid numbers in this table
+# Coerce to numeric
+stu_test$reporting_year <- as.numeric(stu_test$reporting_year)
+# Rename
+stu_test <- rename(stu_test, 
+                   school_year = reporting_year)
+```
+
+Now verify it works: 
+
+```{r schoolyearverify}
+table(stu_test$school_year)
+```
+
+
+Finally, `schid` - our school identifier. 
+
+```{r cleanandverifyschoolID}
+str(stu_test$schid)
+# Already numeric, which is easy
+# Check unique values by year
+stu_test %>% group_by(school_year) %>% 
+  summarize(n_schid = n_distinct(schid), 
+            nrow = n())
+```
+
+Now we know that all schools appear in each year. We could ask a few additional questions about the school identifier if we wanted - how many unique students a school has, how many tests per student a school has, etc. But for now, let's move on to our other measures in our data.
+
+### Recoding Text or Categorical Values
+
+The next column in our data is `test_id` which appears to be a short character description of the type of assessment the student took. We will want to explore this variable to look at the values and how frequently they occur, and how frequently they occur by each dimension of our identifiers (`sid` and `year`). We can continue to use the `dplyr` package and its data manipulation verbs to make quick work of this. First, let's start by looking at the frequency of test codes overall from most common to least common:
+
+```{r lookattestIDs}
+stu_test %>% 
+  count(test_id) %>% 
+  arrange(desc(n))
+```
+
+This code takes our dataset `stu_test` and passes it to the `count()` function, where we tell R to count the number of occurrences of each value in the variable `test_id`. `count()` creates a variable `n` that is the number of times each value of `test_id` appears, so we ask R to `arrange()` the new data by `n`, but in `desc()` descending order. Notice how this code is clear and easy to read with each step being represented by a different function. What's more, it is very modular.
+
+You only see the first few rows of data here, but if you would like to interactively inspect all of the data, you can use the code below: 
+
+```{r testIDview, eval=FALSE, echo=TRUE}
+stu_test %>% 
+  count(test_id) %>% 
+  arrange(desc(n)) %>% 
+  View()
+```
+
+The `View()` function opens up the dataset in RStudio's data viewer window, which allows you to browse and sort the data much like an Excel spreadsheet - though you cannot edit the data here.
+
+Let's extend this same code to provide us with the counts of each assessment by year. Presumably some assessments were discontinued and we want to evaluate which assessments were consistent across years. This will require us to dip our toe into reshaping data - for readability purposes. To do that we'll load the `tidyr` library. We'll learn more about reshaping data in guide 2, but for now the `spread()` function helps us take the data repeated by `school_year` and make it into columns for each `school_year` - which is easier to read. 
+
+```{r counttestsbyyearwide}
+library(tidyr) # install.packages("tidyr") if it is not on your computer
+stu_test %>% group_by(school_year) %>%
+  count(test_id) %>% 
+  tidyr::spread(school_year, n, sep = "_") %>% 
+  arrange(desc(school_year_2010))
+```
+
+Using the sort option puts the most common tests at the top. You can see that some of the test IDs seem to consist of a subject prefix followed by a grade level (for example, MA04 for fourth-grade math, or RD06 for sixth-grade reading). Others (ALG1 for algebra 1 and ALG2 for algebra 2, and USHI for US History) don't follow this format. Others you probably can't identify just from the test ID; you'd need to get additional information from the district to identify those tests. If you want to  look at more tests, you can use the `View()` function as in the previous example.
+
+> This raises a typical question in data cleaning: should you clean all the data  you receive, or focus on the variables (columns) and observations (rows) that you think are most important for your analysis? If you are too hasty in working with data that you don't yet know well, you might mistakenly drop variables or records that you need, that help you understand the dataset, or that you might want later for a different project. On the other hand, data cleaning is labor-intensive, and it doesn't make sense to do unnecessary work. If you have limited time, a very rough rule of thumb is to try to clean all the records you receive, but focus effort on the most important variables. 
+
+In this case, we'll stipulate that you only want the data for state Mathematics and English/Language Arts tests scores for grades 3-8, and that the person who extracted the data for you told you that the IDs for the state math and ELA tests are prefixed by "MA" and "RD". You'll use this information later when you restrict the data and then parse the test IDs to extract the subject and grade level. 
+
+For now, keep data for all the tests during the "column cleaning" part of the data cleaning process, in case the additional tests yield some insights into the patterns of values for the other variables. We'll wait to drop the additional tests until the beginning of the "row cleaning" process. 
+
+### Dates and Times
+
+Next, we have our first encounter with time and date formatted data. 
+
+```{r checkdatetimedata}
+head(stu_test$test_date, 25)
+```
+
+The data appears to be formatted "YYYYMMDD" but we cannot be sure. We have to look for a value greater than 12 in either the of the spots after the year to confirm this. We have three methods we can use to find out how to interpret this date: 
+
+1. Appeal to the metadata
+2. Eyeball it
+3. Use an R function
+
+You should apply these approaches in this order. If your metadata tells you what the correct date  format is, you can apply that without worrying about specifying the format. If you don't have accurate metadata, take a look at the data using `View()` or `head()` or another method of reviewing several values to look for an obvious pattern. If this does not work quickly, or you have a really large dataset, you can use a specialized R package for handling dates known as `lubridate`. The `as_date()` function will attempt to automatically identify the date format, and if your data is consistent in the date format it uses, most often this approach will work. See the documentation for `as_date()` for its many options for handling edge cases. To see how you can specify a custom date format when converting a string to a date, look at the help file for `?strptime()`.
+
+```{r applylubridate}
+library(lubridate)
+stu_test$test_date <- lubridate::as_date(stu_test$test_date)
+```
+
+What is the value of converting our data to a date format? Using the `lubridate` package we can calculate a number of measures based on the date features of the data. For example, which months were tests most common in? We can use the `month()` function to extract the month out of the date variable easily. 
+
+```{r testmonth}
+table(lubridate::month(stu_test$test_date))
+```
+
+Interestingly we see a handful of tests in July and August. Reviewing the distribution of test months can give us some insight into what tests are in the assessment table, and what issues we could encounter as we continue to clean the data. 
+
+It is also helpful to confirm that you have parsed the date correctly. Working with dates can be tricky in any language, and date-time formats can be opaque. Make sure after you convert to dates that the data makes sense. Let's do that now, we want to make sure the years and months we got look like reporting year variable above:
+
+```{r testyearschoolyear}
+table(test_year = lubridate::year(stu_test$test_date), 
+      sch_year = stu_test$school_year)
+```
+
+From this table it looks like for each school year there are two possible test years. Let's explore this a bit further to verify our understanding that `school_year` represents the calendar year of the spring term of a given school year. 
+
+To do this, we will introduce the `mutate()` verb in dplyr. `mutate()` creates new variables and adds them to our dataset without altering the number of rows. In this case we are adding two new variables `month` and `test_year`. Then, we are grouping the data by `month`, `test_year`, and `school_year`. Then, we are counting the number of tests in each combination of these variables. Finally, we are reorganizing the output using `tidyr::spread()` to include a separate column for each `month` value so we can read the data wide. 
+
+```{r tallytestsbydate}
+stu_test %>% mutate(month = month(test_date), 
+                    test_year = year(test_date)) %>% 
+  group_by(month, test_year, school_year) %>% 
+  tally() %>% tidyr::spread(month, n, sep = "_", fill = 0)
+```
+
+This pattern confirms what we were told - when the `test_year` is identical to the `school_year` we only see tests in the months in the first half of the year (January - June). When the `test_year` is one year less than the `school_year` we see tests only in the second half of the year, July - December. 
+
+There is one observation (can you spot it in the table above) where the test_year is school_year -1, but the test occurred in June. Let's review that record:
+
+```{r findweirdtestdate}
+stu_test %>% mutate(month = month(test_date), 
+                    test_year = year(test_date)) %>% 
+  filter(test_year == school_year - 1 & month == 6)
+  
+```
+
+Let's look at how many records we have for this student and for this test:
+
+```{r checkstudentrecord}
+sum(stu_test$test_id == "CSPF")
+sum(stu_test$sid == 359158275)
+```
+
+We'll want to keep this record in mind if we decide on retaining the `CSPF` assessment in our analytic sample. For now, we'll move on!
+
+### Numeric Data
+
+We have a number of numeric measures in our data. Numeric data can be relatively easy to clean, but there are a few problems we should be wary of whenever we encounter numeric data: 
+
+1. Check for proper encoding from character to numeric (if applicable)
+2. Non-response codes coded as numeric (e.g. -3, -9, -99) etc. 
+3. Missing numeric values that should be 0s (or vice versa)
+4. The scale and unit of measurement
+
+#### Converting to Numeric
+
+Let's look into these each now. Let's start by looking at our first numeric variable `score`. 
+Remember that we brought all of our data in as character values to be safe and avoid R potentially destroying data on import by converting it to a different type. This isn't always necessary, but depending on how you are getting your data and how much you trust the source, it's a good way to start. 
+
+This little pattern of code can be used to identify which values of the `score` variable will be converted to `NA` when we tell R to make it a numeric variable, and how frequent they are. We see that most of the NAs will be values that are blank, but some of them will be cases where the `score` is labeled "NS". 
+
+```{r findnumnasscore}
+table(stu_test$score[is.na(as.numeric(stu_test$score))])
+```
+
+Good news here. If we force `score` to be numeric, we will only be coercing these different values to `NA`. And, it seems to make sense - "NS" represents a very small number of observations, and we can assume it likely means "No Score" which we can verify later with whoever has provided us the data. The rest of the NA values will be from empty character values, which is the same as missing.
+
+You can use this code to look at the other variables in the data as well. Go ahead and try it for yourself. 
+
+```{r findnumnaszscore}
+table(stu_test$z_score[is.na(as.numeric(stu_test$z_score))])
+```
+
+For the sake of brevity, we can use the following code to convert all of the correct variables to be numeric:
+
+```{r applynumerictransformation}
+stu_test[, c(1, 2, 3, 6, 8:9, 12:17)] <- apply(stu_test[, c(1, 2, 3, 6, 8:9, 12:17)], 2, as.numeric)
+```
+
+The `apply()` function creates a loop, the `2` tells R to operate the loop on the columns (`1` would be operations on rows), and the `as.numeric()` specifies the function to apply to each column or row. The `c(1, 2, 3, 6, 8:9, 12:17)` code is the numeric index  that represent the column numbers for each column that should be a number. You could also write this index using the actual names of the columns, or more compactly as: `c(1:3, 6, 8:9, 12:17)`.
+
+Note the warning about variables being converted to `NA` - this happens when the character string  cannot be converted to a clear numeric value e.g. "1A" or "2B". It also happens when NA values have  already been encoded to the data using "NA", which is the case in this dataset. 
+
+You can look at which data elements are stored as what type using the `str()` command again: 
+
+```{r eval=FALSE}
+str(stu_test)
+str(sch_attr)
+```
+
+#### Look for Numeric Missing Pattern Codes
+
+To identify missing data codes that have been brought in as numeric, we should first consult any metadata that exists to get the values that represent missing value codes. Especially when working with survey data, missingness codes can be complex and numeric codes are used instead of the `NA` missing value holder in R to capture different meanings for the missing data. Some common values used in education data are -1, -2, and -3 when the variable has to be positive (NCES survey data), -9 and -99, (older NCES financial data). Let's take a look:
+
+```{r scoresummary}
+summary(stu_test$score)
+```
+
+We already know what the NA values represent, and we see here that there are no values that are  negative, which suggests we do not need to worry about those missing codes. There are examples of  legacy datasets (I've come across some old SPSS formatted files or administrative data from 70s or  80s) that use 9 or 99 as a missing code indicator. Let's just do a quick check for those values here: 
+
+```{r check9s}
+# Here we have to use na.omit because otherwise R will match all NA values to 99 as TRUE, since 
+# one possible value an NA value could take is 99. We also take the sum of this logical test to 
+# report back the count of TRUE values, since each TRUE value is counted as 1 in a sum. 
+sum(na.omit(stu_test$score) == 99)
+# And 9s
+sum(na.omit(stu_test$score) == 9)
+```
+
+In this case, we know from our metadata that these are valid assessment values and not missing data  codes so we can proceed. If we were not sure and did not have metadata, we could do some checking to  see if the frequency of 9s or 99s matched our expectations given the distribution of the test score  or we could investigate the test score distribution using a histogram to look for a spike at these values. But, we're busy so we will move on!
+
+(See how good metadata can save us a lot of time!)
+
+#### Looking Closely at Missing Data
+
+Let's return to those `NA` values. We need to pay careful attention to what NA values mean and we should look to evaluate whether NA values should be treated as missing or whether we should treat them as some other value, such as 0. For example, often when we are working with student count data, the count field can be left blank in the collection instrument when there are no students who fit that criteria. This doesn't mean that the students were missing, it means that the person collecting the information skipped this field since it wasn't relevant and 0 students are in that category.
+
+Since we know where our missing values came from for the `score` variable, let's look at the 
+missingness value for the `z_score` variable (formerly `cscore`). 
+
+```{r missingzscore}
+table(is.na(stu_test$z_score))
+```
+
+This variable has much more missingness than the `score` variable - so if it was a simple translation of the `score` variable, something has happened. Now is a good time to use our EDA skills to look at the patterns of missingness by other attributes. Let's look at how much data is missing by `test_id`: 
+
+```{r zscoremissingbytest}
+stu_test %>% group_by(test_id) %>% 
+  summarize(missing_n = sum(is.na(z_score)), 
+            total_n = n()) %>% 
+  arrange(desc(total_n))
+```
+
+Browse through the data above. We see that tests fall into a couple of categories, either they have all of their `z_score` data missing, or only a very small fraction of it. Let's pick one test of each and spot check what might be going on. First, let's start with the `MA03` test, where very few observations are missing a `z_score` and let's inspect what all the score variables look like for observations in this test: 
+
+```{r checkMAtest}
+stu_test %>% filter(test_id == "MA03" & is.na(z_score)) %>% 
+  dplyr::select(score, z_score, z_score_err)
+
+```
+
+Here we can see that in every case the missing `z_score` corresponds to a missing score, but not always to a missing `z_score_err` curiously. 
+
+Let's repeat this for an assessment where every `z_score` is missing. In this case, we'll just look at how much missingness there is for the other two variables to compare. To do this, we will use the `summarize_all` command to apply a summary function to each variable in the data. In this case, we sum up the result of `is.na()` to arrive at a count of NA variables for each of the variables we have selected. 
+
+The `summarize_all()` function introduces the "formula" syntax. In this case, each variable in our data, defined in `select()` above, is passed into the formula where the `.` exists. So first the `score` variable is summarized by `sum(is.na(score))`, then the `z_score` variable:`sum(is.na(z_score))`, etc. etc. This is an efficient way to collapse many columns down at once. 
+
+```{r checkCOMPtest}
+stu_test %>% filter(test_id == "COMP" & is.na(z_score)) %>% 
+  dplyr::select(score, z_score, z_score_err) %>% 
+  summarize_all(~sum(is.na(.)))
+
+```
+
+This result is interesting - here we see that while most of the observations have a valid score (only 4 have a missing `score`), they do not have a valid `z_score`, and again some values have a score and a `z_score_err`, but no `z_score`. 
+
+This pattern should raise up some red flags for us and we need to keep this pattern of missingness in mind as we proceed. At this point, we should start checking in with data experts and the metadata to better understand why this pattern may be occurring and what the `z_score` and `z_score_err` variables mean. 
+
+We will return to this pattern when select which rows to retain in our dataset as well. 
+
+While we're at it, let's also look at the achievement level variable: 
+
+```{r achlevel}
+table(stu_test$ach_level)
+```
+
+This looks like a variable we can safely coerce to numeric. Though, we may wish to label it with text as well - which can be helpful when making graphic summaries, etc. 
+
+```{r convertonumericachlevel}
+stu_test$ach_level <- as.numeric(stu_test$ach_level)
+table(stu_test$ach_level, useNA = "always")
+```
+
+If we wanted to describe the achievement levels we could make this variable an "ordered factor" in R. This would retain the sequential ordering, but allow us to label the values. 
+
+```{r factorachlevel}
+stu_test$ach_level <- factor(stu_test$ach_level, levels = 1:4, 
+                                 labels = c("Below Basic", "Basic", "Proficient", "Advanced"), 
+                             ordered = TRUE)
+summary(stu_test$ach_level)
+```
+
+Categorical data like this is well suited for the `factor` data type. 
+
+#### Understanding the Scale and Units
+
+Finally, we need to understand the units of our measured variables and make sure that they fall within the ranges we expect. As an example, we have several variables in our data that end in `_per` - and they represent proportions of students enrolled in schools that meet certain attributes. We would expect these to range between 0 and 100 or 0 and 1. Let's test that:
+
+```{r percentagevars}
+stu_test %>% select(ends_with("_per")) %>% 
+  summary()
+```
+
+Here we do not see any invalid values (proportions < 0 or > 1). That's good news and gives us confidence in these proportions. Let's look at another variable, `sch_enroll` which we believe to be the size of the school: 
+
+```{r sch_size}
+summary(stu_test$sch_enroll)
+```
+
+This checks out as well - these are sizes that we would expect to see in schools, although the minimum size does seem a little small!
+
+### Recoding
+
+Now we turn to the most tedious part of data cleaning, but also the most powerful and useful, standardizing categorical variable labels and codes. When we collect measurements that are categorical all kinds of funny things can happen to them - words can get misspelled, labels can change over time, or white space and stray characters can creep in. We need to be able to recode the values in these variables so they can be analyzed. 
+
+Let's quickly clean up the `test_id` variable since we will need it to inspect our other variables. You may have noticed above that it includes a lot of "nearly identical" values such as "SC05", and " SC05": 
+
+```{r uniqtests}
+unique(stu_test$test_id)
+```
+
+For now, let's trim the whitespace - we'll further clean this variable below:
+
+```{r cleantestidwhitespace}
+stu_test$test_id <- trimws(stu_test$test_id)
+unique(stu_test$test_id)
+```
+
+Much better, now let's turn our attention to recoding. 
+
+Let's take a look at an example: 
+
+```{r testaccomvalues}
+table(stu_test$accommodation, useNA = "always")
+```
+
+Two things are going on here. First, the vast majority of observations are missing for this variable. We have a challenge of deciding if these are students who did not receive an accommodation or for whom an accommodation was not offered. Second, we have multiple codes for accommodations, many of which appear to mean the same thing "1" and "Y". We need to unify these codes first, then assess where this variable is missing and why. 
+
+Let's assume that the documentation for the data we are working with indicated that "1" means that astudent received an accommodation. Our first step is to unify the "Y" and "1" codes into a single value. Let's do that now:
+
+```{r alwaysinspectunique}
+# First inspect the unique values
+unique(stu_test$accommodation)
+```
+
+We can trim the white space and then replace "1" with "Y" and we will have unified the codes:
+
+```{r prepaccomcodes}
+# Trim white space from the codes
+stu_test$accommodation <- trimws(stu_test$accommodation)
+# Replace values of "1" with a "Y"
+stu_test$accommodation[stu_test$accommodation == "1"] <- "Y"
+unique(stu_test$accommodation)
+```
+
+Now, we have the question of what to do with the NA values. It seems reasonable to assume that some assessments do not offer accommodations, so the missingness may be from that assessment not having any data in those fields, and also the lack of data meaning that no accommodation was received. In cases where some students are given an accommodation, we may need to proceed with more caution, as missing values here could mean the student was not offered an accommodation or that the accommodation code was invalid when the data was stored in the assessment table. 
+
+```{r accommodationrates}
+stu_test %>% group_by(test_id) %>% 
+  summarize(accom_count = sum(!is.na(accommodation)), 
+            test_count = n()) %>% 
+  mutate(accom_per = accom_count/test_count) %>% 
+  arrange(desc(accom_per))
+
+```
+
+We want to look at the assessments with no accommodations closely and assessments with high rates of accommodations as well. One other thing we want to look at is if this pattern in accommodations changes by year. Let's look at that for one assessment:
+
+```{r reviewsco08}
+stu_test %>% filter(test_id == "SC08") %>% group_by(school_year) %>% 
+  summarize(accom_count = sum(!is.na(accommodation)), 
+            test_count = n()) %>% 
+  mutate(accom_per = accom_count/test_count) %>% 
+  arrange(desc(accom_per))
+
+```
+
+This pattern is interesting, there were no accommodations in this assessment offered in 2008. We should look further. Notice how we can flexibly use the `%>%` syntax, `group_by()`, and `mutate()` and `arrange()` together to interactively review different slices of the data:
+
+```{r accmodationbyyear}
+stu_test %>% group_by(school_year) %>% 
+  summarize(accom_count = sum(!is.na(accommodation)), 
+            test_count = n()) %>% 
+  mutate(accom_per = accom_count/test_count) %>% 
+  arrange(desc(accom_per))
+
+```
+
+Ah ha! We see no accommodation data was recorded before 2009. We cannot safely assume that students tested before 2009 without accommodation data did not receive an accommodation then, so recoding these values to 0 would be wrong. 
+
+Let's set up a rule where if accommodation data is missing from a record for a test where some students received an accommodation, we code a student "N" for not having received an accommodation. For assessments where no accommodation data is received, we leave the data as missing. This is an example of a business rule - a set of decisions we are making about the data to make it more useful for analysis. To build this business rule, we need to take three steps: 
+
+1. Define the conditions we are going to change the data 
+2. Identify the observations we want to change
+3. Apply the transformation
+
+Using the `dplyr()` data wrangling syntax, fortunately, we can do this rather easily. Our first step is to identify the assessments for which we are going to apply this business rule:
+
+```{r findtestswaccomodations}
+stu_test %>% filter(school_year > 2009) %>%
+  group_by(test_id) %>% 
+  summarize(count_yes = sum(!is.na(accommodation))) %>% 
+  filter(count_yes > 0) %>% 
+  pull(test_id) -> test_keys
+```
+
+This code uses `filter()` to select all observations after 2009. Then for each `test_id` we count the number of observations where there is non-missing `accomodation` data. We call this variable `count_yes` or the number of rows where `Y` is recorded as an accomodation. We then drop all tests where the `count_yes` variable is equal or less than 0 using `filter()`. This gives us only rows where there are more than 0 students reported as receiving an accommodation.
+
+Notice the last line here `pull(test_id) -> test_keys` This is the power and flexibility of the `dplyr` syntax - here we are taking the values of the `test_id` column (after we have filtered the data to only include the tests with at least 1 value that is non-missing) and assign it using the reverse assignment operator `->` to a new variable `test_keys`. This allows us to read our code from left to right seamlessly. Look at this object now:
+
+```{r checktestvalues}
+str(test_keys)
+```
+
+
+Now that we know which assessments it is safe for us to recode their missing data as "N", we need to apply that transformation to the data. 
+
+```{r applyaccbizrule}
+stu_test <- stu_test %>% 
+  mutate(accommodation = if_else(school_year >= 2009 & test_id %in% test_keys & 
+                                   is.na(accommodation), "N", accommodation))
+```
+
+In this case, we have told R to recode missing values of accommodation in school_years >= 2009 with test IDs that match those in the `test_keys` object we created from NA to "N". The `if_else()` function allows us to assign one value if the logical test is TRUE and another if it is FALSE. In this case, if the row is from `school_year >= 2009` AND the `test_id` matches one of the test_ids in the `test_key` object AND the current value of `accommodation` is a missing value - we replace that value with "N". If these conditions are not satisfied, we simply retain the existing value of `accommodation`. 
+
+Let's look at how this looks in our data now by seeing what percentage of observations are missing accomodation data:
+
+```{r reviewaccomrates}
+stu_test %>% group_by(school_year) %>% 
+  summarize(accom_count = sum(!is.na(accommodation)), 
+            test_count = n()) %>% 
+  mutate(accom_per = accom_count/test_count) %>% 
+  arrange(desc(accom_per))
+
+```
+
+Look at the distribution of accommodations and missing accommodation data over time
+
+```{r testaccomodationbyyear}
+table(stu_test$accommodation, stu_test$school_year, useNA = "always")
+```
+
+From this we can see that we didn't modify data in years earlier than 2009, which gives us a sense that our business rule worked. However we still see a high proportion of missing values of accommodation in 2009 - let's just check that all the cases where this is true occurred in assessments not in our variable `test_keys`:
+
+```{r testassessmenttypebyear}
+table(stu_test$test_id %in% test_keys, stu_test$school_year, useNA = "always")
+```
+
+Here we can see that in 2010 all but 1 observation had a test in the `test_keys`, but in 2009 there were still some assessments administered that did not have accommodation data, which is why we see a mix of missing and non-missing data. This tells us an important fact about the transition in our data. 
+
+
+#### Getting Variables Out of Values
+
+Another problem in recoding variables comes when data about two or more different things are encoded into a single column. In this case, we suspect that grade level and subject are both encoded in some of the test codes in our test identifier codes below. Codes like "MA10" and "RD03" mean "grade 10 mathematics" and "grade 3 reading". We may want to extract that information in a separate column so we can analyze scores separately. We've already dealt with the duplication caused by stray whitespace so this table is manageable now. 
+
+```{r freqtableassestype}
+table(stu_test$test_id)
+```
+
+Much better! Now looking at the pattern of test IDs we see four types of tests that follow the subject/grade pattern: "MAxx", "RDxx", "SCxx", and WRxx". Let's create a new grade variable that, for these assessments, encodes the grade level data into a separate column. There are a number of ways we can accomplish this, below is one example, but depending on the patterns in your data and the number of codes you have to recode, you may need a different pattern. 
+
+To do this, we'll use the `stringr` package, and specifically the `stringr::str_sub()` function to trim the last two characters off the end of the assessments. 
+
+
+```{r parseassessmentgrade}
+library(stringr) #install.packages("stringr") if you do not have it installed
+# Fill it with the last 2 characters from every test_id value
+stu_test$grade <- stringr::str_sub(stu_test$test_id, -2) 
+table(stu_test$grade)
+```
+
+Notice that we didn't modify the `test_id` code, we just created a new variable that contains the last two characters from the value of `test_id`. This is important, because we may still want to use the full name of the assessment in some of our analysis - and we have assessments whose last two characters are not grade levels and we don't want to modify their names.
+
+Now we have an odd mix of codes - our goal is to convert this to numeric data and let the rest of the values turn to NA - the grade data is not available for these assessments. But we have one problem - the `3P` code, which we know from asking at the office represents a grade 3 assessment. So let's recode it, and then convert the `grade` column to numeric, leaving all the non-numeric values to NA. 
+
+```{r graderecode}
+# We have one pesky problem with the 3P code
+stu_test$grade[stu_test$grade == "3P"] <- "03"
+stu_test$grade <- as.numeric(stu_test$grade)
+table(stu_test$grade)
+```
+
+Voila. Check the grades
+
+```{r checkgrades}
+table(stu_test$grade, stu_test$school_year, useNA = "always")
+```
+
+#### Checking School Name and ID
+
+Let's also quickly ensure that each school name corresponds to one and only one school ID: 
+
+```{r checkschoolnames}
+stu_test %>% group_by(schid) %>% 
+  mutate(n_names = n_distinct(sch_name)) %>% 
+  pull(n_names) %>% summary
+```
+
+Here we see that each school ID has only 1 unique school name associated with it. 
+
+### Finishing Up Our Measures
+
+We've now cleaned all of our measures including splitting one column into two to better capture the information it contains. After doing this, you may wish to save your work - though if you have been using a script you can always go back to the source data and re-run your code to reproduce your work. 
+
+#### Saving and Reloading Our Work 
+
+Before we proceed, let's take a pause. A best practice when cleaning data like this is to make some changes to modify the data, then reload the original data and run all of your code to that point to make sure that all of the changes you made are captured in your syntax file. The Rmd format and RStudio makes this very easy.
+
+First, you want to clear everything in your existing workspace. To do this you can either click the "broom" icon in the Environment pane, or you can run the function `rm(list = ls())` in the console.
+
+Caution: *When you do this, everything in your environment will be removed from memory.* 
+
+After you have cleared objects from memory, you still have all the packages loaded. When you start using projects with multiple packages loaded, the interactions between these packages can compromise reproducibility. To ensure your code works, make sure to start a fresh R session and run your code again. This will help you catch errors, like forgetting to include a `library()` call in your syntax file, which will make it difficult for others to recreate your work. You can restart R by either selecting "Restart R" from the Session menu in RStudio or by typing Ctrl + Shift + F10.
+
+To run the code up to the place you are at, you can go to the play button of the code chunk and select the icon to the left to "run all code above this chunk", and then run the current chunk with the play button icon.
+
+Do this process now before continuing. Using this process to write or review code--writing and running a few lines at a time, until you find a time when you need to "reset" your work by running everything from the beginning--is pretty typical.
+
+### Set Up
+
+After our first data cleaning session, we saved the steps to an R script so we could pick up where we left off. The command below runs that script from start to finish and allows you to resume your work where the last guide left off. The `source()` function allows you to run all the commands in an R script. [You can just keep going]
+
+
+```{r resumework, echo=FALSE, message=FALSE, warning=FALSE}
+#source("data/cleaning_raw_data_pt1.R", echo = FALSE)
+```
+
+Sourcing a script is great, but a few things are important to keep in mind. All the packages loaded in the script will now be loaded when source this script. This is handy, but it can sometimes be hard to keep track of which packages are loaded and which are not - which can be important for debugging code. A good idea is to look at what packages are loaded after you source a script to give yourself a reminder of what your R environment looks like: 
+
+```{r sessinfo}
+print(sessionInfo(), locale=FALSE)
+```
+
+
+## Standardize Your Rows
+
+Once our measures are cleaned, our next step is to identify incomplete, duplicate, or erroneous observations, or rows in our data. To do this work - we will focus our attention around understanding the uniqueness of the dataset, that is, what the variables are that together should define an individual row in the data. Once we know the uniqueness of our data, we can then apply transformations necessary to make it work for our analytic purposes. 
+
+### Finding Uniqueness
+
+Uniqueness is something we should be able to determine from the metadata, but that we always want to confirm. In this case, we believe that student records should be unique by a combination of `sid`, `school_year`, and `test_id` and we can verify it by confirming that the number of unique combinations of these three variables combined equals the number of rows in the dataset. To do this we use the function `dplyr::distinct()` which creates a subset of the data with all the unique combinations of the variables we select. 
+
+```{r checksids}
+# Distinct values of the IDs
+distinct(stu_test, sid, school_year, test_id) %>% nrow
+# Distinct rows in the data
+nrow(stu_test)
+```
+
+We see that the results of these two commands are not the same, we have more rows in our datasetthan unique combinations of the variables we selected. So now we need to look for the othervariables that might be defining uniqueness - a good next guess is `schid`:
+
+```{r checkuniquenssrows}
+distinct(stu_test, sid, school_year, test_id, schid) %>% nrow
+```
+
+Closer, but we are still not quite there! What about students taking tests on multiple dates?
+
+
+```{r checkuniquebydate}
+distinct(stu_test, sid, school_year, test_id, schid, test_date) %>% nrow
+```
+
+Now we are really close, but still not there. It is hard to think about what additional variables there could be, so now we need to investigate what duplication is occurring to identify if there is any way to separate out duplicated records. To do this, we use the code pattern below which takes advantage of the dplyr commands to count records for each combination of variables we believe define uniqueness and then select the combinations that have more than 1 row so we can review the other data elements for our duplicated rows. Again, we use the `->` assignment operator to create a new object `dupes` at the end of this pipeline of commands, so we can work with the duplicates separately from the rest of our data. 
+
+> Note that this command takes a little while to complete. Why? This code is looping through all 400,000+ unique combinations of our grouping variables and calculating a statistic for each of them. Keep this in mind when doing complex grouping operations - the more unique combinations in your group, the longer it can take the code to process. Computers and R are both getting faster every day, but you can still run into limits.
+
+```{r createdupes}
+stu_test %>% 
+  group_by(sid, school_year, test_id, schid, test_date) %>% 
+  mutate(row_count = n()) %>% 
+  filter(row_count > 1) -> dupes
+```
+
+Let's do some analysis on these duplicated records by saving them as a subset. Pro-tip, you can also use the `View()` command to review them directly in the RStudio Viewer window, a very handy way to just "look at the data". To do this run `View(dupes)`. 
+
+In this case, let's use frequency tables to look at the pattern of duplicates by other variables: 
+
+```{r lookatdupespattern}
+table(dupes$test_id, dupes$school_year)
+```
+
+This pattern is helpful, but it doesn't tell us what to do with the duplicates necessarily or give us a clear sense of how the duplication is occurring - just that duplication is worse in years prior to 2009. 
+
+At this point you should reach out to the district's assessment department to discover why there areso many near-duplicate records, but getting an answer to your query will take time, and might notfully resolve the issue. Should you ask for a new data pull? You could consider doing so. But the"extra" near-duplicate records make up only ~1.2 percent of the total records (5574/448362).
+
+If you believe that most of the student data is accurate, having inaccurate data 
+for one or two percent of your dataset is unlikely to bias your results if you 
+are interested in analyzing patterns in the data rather than developing 
+individual accountability results. Rather than calling a halt to the data 
+cleaning work, it makes sense to proceed by applying a decision rule to choose 
+a single test score record in cases where there are near-duplicates. 
+
+Before starting to apply decision rules to pick specific test instances, let's perform a final check to see if there are any cases where the test scores, test IDs, and test dates 
+are all the same, and some other variable is different. In this case, let's check out if students have two tests on the same date but with different scores:
+
+This code uses the `duplicated()` function in R to count the number of rows that are duplicated in our data. To use it we pass in our dataset, using the `[` to select only the columns we want to test - in this case `sid`, `school_year`, `test_id`, `test_date`, and `score`. 
+
+```{r checkdupesbyscore}
+table(duplicated(stu_test[, c("sid", "school_year", "test_id", 
+                              "test_date", "score")]))
+```
+
+So, we even have duplicated scores. Now that we have a sense of how the duplication is working lets look at our options to remedy it. 
+
+### Dealing with Duplication
+
+Now we know the data should be unique at the student-year-testid-testdate level, but it is not. How do we go about resolving this? We need to enforce another **business rule** to select which record to keep and which record to discard in each case there are duplicates. Again, business rules can be somewhat arbitrary - but we have to make a selection in order to proceed. We could just remove all duplicated records from the data, but in this case let's use a two-step business rule. The key thing here is that we document our business rules. 
+
+1. If a student has the same test on the same date, but two different scores, let's take the higher of the two scores.
+2. Second, if a student has the same test in the same year, but on different dates, let's take the earliest of the two test records.
+
+After we implement these, let's see how many duplicated records remain. Note that we document how many rows we drop here in a code comment, so that when we re-execute these commands later, we can check to make sure that what happens in this step matches what happened when we wrote the code. 
+
+In this step we create a new variable `keep` which is equal to 1 if the score in that row is the max of all the scores in all rows for that combination of student, schoolyear, test, and test date. 
+To drop the scores that are not the maximum score then, all we have to do is `filter()` the data to only rows where `keep == 1` and then we can drop the `keep` variable. We could do this all in one step, but for the first time we do it can be handy to split it in half so we can inspect how many records change and document it. 
+
+```{r bizrule1}
+stu_test <- stu_test %>% group_by(sid, school_year, test_id, test_date) %>% 
+  mutate(keep = if_else(any(!is.na(score)), 1, 0)) %>% # drop cases where there are no non-missing scores
+  filter(keep == 1) %>%  # drop 3,235 records
+  mutate(keep = if_else(score == max(score, na.rm = TRUE), 1, 0)) %>% # drop missing
+  as.data.frame()
+
+stu_test <- stu_test[stu_test$keep == 1, ] # drop 4,669 records
+stu_test$keep <- NULL
+```
+
+Now, we'll decide to keep the record from the earliest test date, using similar syntax. Here the first record of each group is kept - the record corresponding to the minimum date. This is also a good time to highlight the value of the prior column cleaning we did to create the test date variable as a date. This allows us to use the `min()` function to calculate the date in our `mutate()` call. 
+
+```{r bizrule2}
+# Start with 440404 rows
+stu_test <- stu_test %>% group_by(sid, school_year, test_id) %>% 
+  mutate(keep = if_else(test_date == min(test_date), 1, 0)) %>% 
+  filter(keep == 1) %>%
+  as.data.frame()
+
+# End with 407690
+# 36,003 records dropped
+```
+
+Now, let's confirm the uniqueness of the data after applying our business rules and see what 
+further duplicates look like. 
+
+```{r check4duplication}
+table(duplicated(stu_test[, c("sid", "school_year", "test_id", "score")]))
+```
+
+```{r visuallyinspectdupes}
+stu_test %>% group_by(sid, school_year, schid, test_id) %>% 
+  mutate(keep = n()) %>% 
+  filter(keep > 1) %>%
+  View()
+```
+
+The remaining cases are truly duplicated, so we can just drop the excess data. We should note 
+these cases and note how we handled them - they may be helpful in diagnosing future data problems and in working with the data providers to understand what the sources of error are that we should be on the lookout for. 
+
+Here we use the `distinct()` command, but add the `.keep_all = TRUE` argument to tell `distinct` to subset to the unique values of the variables we specify, but not drop any other variables. 
+
+
+```{r dropem}
+stu_test <- stu_test %>% 
+  distinct(sid, school_year, test_id, schid, test_date, .keep_all = TRUE) 
+```
+
+Now, let's see if we can also find our data to be unique by `sid`, `school_year`, and `test_id` - it's a good idea to explore how few variables we can use to define unique rows, and after we resolve some other forms of duplication it is good to revisit this: 
+
+```{r recheckdupes}
+stu_test %>% 
+  group_by(sid, school_year, test_id) %>% 
+  mutate(row_count = n()) %>% 
+  filter(row_count > 1) -> dupes
+
+```
+
+But wait, we have 6 remaining cases of duplication. These are truly odd - these students took the same test on the same day and got the same score, but were in two different schools (we also note their z_score is different, which is also strange). What should we do with these records? With no way to decide between them we could create another business rule. But, given how few records it is and how we have identified them precisely, we can safely drop them and continue with our analysis: 
+
+```{r droptruedupes}
+stu_test <- stu_test %>% 
+  group_by(sid, school_year, test_id) %>% 
+  mutate(row_count = n()) %>% 
+  filter(row_count == 1)
+rm(dupes)
+```
+
+Verify the uniqueness with the code below:
+
+```{r testuniquenessnow}
+stu_test %>% distinct(sid, test_id, school_year) %>% nrow() == nrow(stu_test)
+```
+
+### Aggregating Data
+
+Now our data is unique at the student-year-test level, let's look at what we might want to do 
+with it. Another key step in defining our rows is in possibly constructing measures that are 
+aggregates of rows. A common analysis we may wish to do is to look at the average test score by school, and compare how each student does relative to their peers in the same school. This type of aggregation work is helpful for both modeling and for reporting. Luckily, we already have learned the commands we need to do this above: 
+
+```{r schavgscore}
+stu_test <- stu_test %>% group_by(test_id, school_year, schid) %>% 
+  mutate(sch_avg_score = mean(score, na.rm = TRUE), # we don't have any NA values in score, but 
+         # we  want to get in the habit of including this code here
+         sch_test_n = n()) %>% ungroup
+
+```
+
+Let's visually inspect 50 random rows of this data: 
+
+```{r check50}
+stu_test %>% dplyr::sample_n(50) %>% 
+  dplyr::select(test_id, school_year, schid, score, sch_avg_score, sch_test_n) %>%  
+  print
+```
+
+Now, for each school-test-year we can see the average score for students in the school and the number of students who participated in that test. Then, if we want we can construct the relative distance of a student from the mean. We have a lot of possibilities depending on our analysis. 
+
+We can also create a new dataset of only the aggregated data, if we wish to check how our student data matches aggregate published data, or we wish to do some school-level analysis. Here, the difference is that instead of using `mutate()` which appends a column to the existing dataset, we use the `summarize()` command, which collapses the data down to one row per combination of the grouping variables. If we do this, we want to be sure to save the new dataset as a new object or else we'll lose our student-level completely. 
+
+```{r schtestscoredata}
+sch_test <- stu_test %>% group_by(test_id, school_year, schid) %>% 
+  summarize(sch_avg_score = mean(score, na.rm = TRUE), 
+            sch_test_n = n(), 
+            sch_score_sd = sd(score, na.rm = TRUE), 
+            sch_na_count = sum(is.na(score))) %>% ungroup
+
+head(sch_test)
+
+```
+
+Note the size of the `sch_test` object - does it have the number of rows and columns you'd expect? It's good to think about the size of this object as a way to check that your code is doing what you intended. 
+
+### Explore the Data
+
+Now that we have the columns and rows in order - it is a good time to do a loop through of some EDA to identify remaining issues and get an understanding for what the cleaned data looks like. Since you've already become experts at EDA through the previous modules, we'll focus here on 
+
+You don't have information about the `cscore` and cscore_err variables, but based on the `cscore` range, `cscore` may be a standardized version of the scaled test score. Standardized scores are typically centered close to 0 and range from -4 to 4. 
+
+```{r correlationinzandscore}
+cor(stu_test$z_score, stu_test$score, use = "pairwise")
+```
+
+The overall correlation between scaled scores and `cscore`s is very low--this makes sense, since different tests have different ranges, and those ranges may also change across years.
+
+Let's look at the correlation between these two variables by test and by year - which we would expect to be higher. 
+
+```{r}
+stu_test %>% group_by(test_id, school_year) %>% 
+  summarize(test_cor = cor(score, z_score, use = "pairwise")) %>% 
+  View()
+```
+
+Checking the correlations by test and year, they are for the most part very close, confirming that `cscore` is a version of the test score for some tests in some years. 
+
+A few of the tests have very low `cscore` correlations. Examine two of these graphically, along with a test with a high correlation for comparison.
+
+```{r scatterplots}
+library(ggplot2)
+# Create a subset of the data to plot
+plotdf <- stu_test %>% filter(test_id %in% c("ALG1", "RD05", "ENGL")) %>% 
+  dplyr::select(test_id, school_year, score, z_score) %>% 
+  as.data.frame() #add this to avoid errors related to incompatible datatypes when using %>%
+
+ggplot(plotdf, aes(x = score, y = z_score)) + 
+  geom_point() + # make a scatterplot
+  facet_grid(school_year~test_id) # facet the scatters by year and test subject
+
+```
+
+To examine the graphs, make the graph window full screen so it's easier to see the individual graphs. The explanation for the low correlation is clear: the problematic tests and years appear to have two different score ranges. It's likely that scores for two different versions of the tests were lumped together in the data. If you planned to use these tests in your analysis, you would need to find out more details about the test forms and versions for the problematic tests and years. 
+
+```{r}
+ggplot(plotdf[plotdf$test_id == "ENGL", ], 
+       aes(x = score)) + geom_histogram(bins = 100)
+
+ggplot(plotdf[plotdf$test_id == "ENGL", ], 
+       aes(x = z_score)) + geom_histogram(bins = 100)
+
+```
+
+You might wonder if you should use the z_score variable, rather than the scaled score, since it appears to correct for this problem. But you don't know the details of how z_score was derived, and you saw in the correlation tables that it is missing for many tests. Even if the variable is fully populated for the tests you care about, as you have seen it might mask issues with those teststhat you should be aware of. You are better off using the scaled scores and examining them carefully for the tests you are interested in. After examining the scaled scores, you can derive your own standardized scores and use them to compare scores across tests and years. 
+
+For now, note that you should likely drop the z_score variables, and make a note to yourself to inquire about their provenance. When making notes to yourself, it's a good idea to prefix them with a consistent symbol so that you can find them quickly. Here the follow-up reminder is preceded by `#
+TODO:`
+
+```{r deslectvars}
+stu_test <- stu_test %>% dplyr::select(-keep, -row_count, -z_score, -z_score_err)
+# TODO: consider dropping z_score here after learning more about how it was derived
+```
+
+## Reshape the Data
+
+So, now that we've cleaned our rows and columns, and done some exploration, we are almost ready to analyze our data. Now we have to talk about the "shape" of our data, as much of our work as data analysts will be spent organizing tabular data into the correct format for the correct type of analysis. In general, R prefers data in a "long" format - that is, with as few columns as possible, and repeated entries for observations indicated by sequential variables.
+
+That is how our data is currently constructed. We have student test scores, but our data only
+contains one column for scores, and other columns indicate which test and which year each score belongs to. This was called "tidy data" in the pre-readings. It is simply the method that most R analysis tools prefer to work with data.
+
+Stata and other software packages sometimes prefer data in the wide format, where multiple
+measurements from the same observation are stored as different columns. Wide data might include each score for a student-year in a different variable/column - so our data would have "ALG2_score", "MA10_score", "CRD_SCORE", etc. The result would be fewer rows but many more columns. However you are used to working with data - wide or long - you can be sure that you'll have to be able to movedata between these two shapes, sometimes within the same analysis file.
+
+So, let's look at how we might go about reshaping our data. 
+
+1. Reshape only what is necessary
+2. Lags and derived variables
+3. Column naming and working with many columns
+
+### Reshaping 101
+
+The first and most important rule of reshaping is to only take what you need. Every variable you include in reshaping is another opportunity for problems to arise, so proceed with caution. A little bit of thinking upfront can save you a lot of possible debugging trying to get the reshaping commands to work later. 
+
+Reshaping is a complex process so we should approach it with the same caution and attention to detail we would approach specifying the functional form of a regression model. The more often you do this, the more comfortable you'll become reshaping data. 
+
+But the first rule is take only what you need. To demonstrate this, let's imagine that we want to create a dataset that includes a column for each assessment a student took in each year. So instead of our data being unique by sid-test_year-test_id we want the data to be unique by sid-test_year with multiple columns, one for each assessment. 
+
+If your data is small, you can guess and check with the reshaping commands and view your data until you get the shape right. This is an OK approach and one I use on quick projects all the time! But, when your data is larger and has a complex hierarchy like our data here, it can be helpful to think analytically about what exactly the current data looks like and what we expect the source data to look like. 
+
+In this case, the most important question is to think about how many columns we expect (e.g. how many unique assessments there are): 
+
+```{r checkassessments}
+length(unique(stu_test$test_id))
+```
+
+This is how many columns each student-year observation will have for each variable that varies by assessment. In this case, we have 6 variables that vary by assessment: `test_date`, `score`, `ach_level`, `accommodation`. If we moved all of these variables to be wide, each of them would expand to 37 columns, resulting in 148 new columns. So we want to think carefully about which of these measures we intend to bring with us when we convert the data wide.
+
+We also want to think about how many rows we will lose. In essence, we should now have 1 row per student per year. 
+
+```{r distinctrowstotransform}
+dplyr::distinct(stu_test, sid, school_year) %>% nrow
+```
+
+So just the assessment data, if we moved it from long to wide, would now have 153,447 rows and 150 columns (148 + 2 identifier columns). If we simply moved the score variable, we'd have 153,447 rows and 39 columns (37 + 2 identifier columns) - which seems much more manageable. 
+
+A final caution - reshaping data is a great way to pressure test how clean your data really is. If you have repeated rows, duplicated data, or missing data in key columns the reshaping procedure can fail or produce a strange looking reshaped dataset that does not meet your expectations. When the reshaped data does not look like you would expect, consider the original data carefully. Do duplicate records exist? Does missing data appear in the identifier columns? 
+
+So now that we've set expectations, let's give this a try. R provides two ways to reshape data, and I find myself using both interchangeably. Neither is ideal for every situation so we'll demonstrate both here and you can choose for yourself which way feels more intuitive and understandable to you. 
+
+#### Long to Wide
+
+In this code we will use the `tidyverse` package `tidyr` to reshape the data. When you want to reshape data from long to wide in `tidyr` you use the verb `spread()` - to spread your long data out across a wider area. The two arguments to `spread()` that control this are the name of the variable you want to use to name the wide columns (`test_id`) and the name of the value you want to put in each cell when you spread the data wide (`score`). 
+
+```{r long2widetidyr}
+# Method 1
+library(tidyr)
+stu_test %>% dplyr::select(sid, school_year, test_id, score) %>% # select the variables we want to move
+  spread(test_id, score) -> test_wide # select which variable defines new columns, and which variable 
+# to fill those new columns with
+str(test_wide)
+```
+
+The data came out in exactly the shape we expected - how great! In this code we reduced our data to only the variables we wanted to retain. Then we told R to spread the `score` variable out wide by the values of the `test_id` column. So for each unique value of `test_id` R made a new column, and where there was a `score` for that `test_id` it filled that value in. Where there was no score for that `test_id` R filled in missing data, `NA`. Optionally, we could fill this data in with 0s instead, if that was more appropriate for our data. 
+
+In base R, without loading or installing any packages, we have a powerful reshape function. This function was originally intended to reshape time series data, so the function arguments are less intuitive. In this case, we define the data we want to reshape, we tell the function which variables will make a unique row in the reshaped data (`idvar = c("sid", "school_year")`, we define the variable to use in labeling the new columns (`timevar = c("test_id"))`), and we specify the direction we want to shift the data - in this case to wide. 
+
+> reshape() allows us to reshape multiple variables at a time more easily than `tidyr`, but it also has very difficult to decipher error messages. A good pattern if you find yourself using `dplyr` to manipulate data is to always remember to set your data back as a `data.frame` before using `reshape`. This command takes almost no time to execute, and it will eliminate the chance for time consuming errors in the reshaping of the data 
+
+```{r long2widebase}
+# Method 2
+## Reset the data as a dataframe
+stu_test <- as.data.frame(stu_test)
+test_wide <- reshape(data = stu_test[, c("sid", "school_year", "test_id", "score")], #subsset only 
+                     # the variables we want to use
+                     idvar = c("sid", "school_year"), # variables that do not chance
+                     timevar = "test_id", # the variable we want to turn into columns
+                     direction = "wide") # tell reshape which direction we are shifting the data to
+```
+
+Inspect the result for yourself, you'll see the identical result is produced. Which you use is up to you and what works best for your needs. I find myself moving seamlessly back and forth between them - depending on the project, data I am working with, and my analytic goals. 
+
+#### Wide to Long
+
+Sometimes you will be given data that is wide - survey questions or multiple assessment scores per student record for example - and you'll want to shape that data to be long. We can use the same two approaches above, with modifications, to go back from wide to long. 
+
+To go in this direction, we use a different verb from `tidyr` - `gather()`. In this case, we are gathering up several columns and reshaping them into just two - a `key` column and a `value` column. The `key` column defines how we will differentiate between the multiple columns in the wide format. The `value` column stores the value for each different column, now in a single column. 
+
+In this case, we define our `key` variable to be `test_id` - in gather we are just choosing the name for the `key` and `value` columns, and we can make them whatever we want. We call the `value` column `score`. Now, there is one additional argument to `gather()`, which is that we need to tell it which columns we wish to gather up and reshape long. The `tidyverse` packages have a number of helpful ways of selecting column names - check out the documentation for some great examples. 
+In this case I just deselect (using `-`) the two identifier columns, so the function will then `gather()` up the rest. 
+
+```{r wide2longtidy}
+# Method 1
+test_wide %>%  # select the variables we want to move
+  gather(key = "test_id", value = "score", 
+         -sid, -school_year) -> test_long # select which variable defines new columns, and which variable 
+# to fill those new columns with
+str(test_long)
+
+```
+
+With `reshape()` we specify our `idvar` and set the direction to long, and let the function do the rest. One thing we may have to do is clean up the row.names and the column names of the reshaped data. 
+
+
+```{r wide2longbase}
+# Method 2
+test_long <- reshape(test_wide, idvar = c("sid", "school_year"),
+                     timevar = "test_id",
+                     direction = "long")
+str(test_long)
+```
+
+In both cases, the data reshaped long is now longer than our original data. We have padded each student record with NA values for every combination of `test_id` and `school_year`. Both reshape methods allow you to drop these extra observations. 
+
+Reshaping can become more complex when you want to reshape multiple variables at the same time, you have a complicated uniqueness structure to your data, or you need to retain missing data in some specific ways - but this is a good introduction to the basics! 
+
+```{r dropextradata}
+# clean up this extra data
+rm(test_long, test_wide, plotdf)
+```
+
+### Leading and Lagging Data
+
+A related operation to reshaping is to calculate leading or lagging variables - as we demonstrated in the lecture. A very common example is looking at student growth on an assessment across time periods. Let's look at how we can do this with our long `stu_test` data. We need two pieces of information to do this correctly - what group of observations do we want to do the lag on, and what variable do we want to use to define the time period between lags. In this case, if we have "ragged" data - that is, we have students who are not observed completely in all time periods, we need to pay careful attention to what variable defines the time period to calculate the lag using. But, wait, we have a problem because our test id variable includes both the test and the grade level in the name so if we lag by student and test ID, students will only rarely take the same "testid" when they repeat a grade. 
+
+So - here is an example of where we have to revisit our columns and do some additional column 
+cleaning. 
+
+Let's stick with our "long" dataset for now. And, for the sake of this syntax guide, let's assume that our analytic question is to measure student annual test score growth gains on our "RD" and "MA" tests - state summative reading and mathematics assessments. **Think about what might be complicated if we do not do this.**
+
+For our analytic sample, we need to drop assessments that are not "MA" or "RD", and we need to drop the first year of the data where there is no pre-test available to use to measure growth. 
+
+To help with this, let's look at the number of test taken by these tests by year: 
+
+```{r checktestsbysubject}
+stu_test %>% filter(grepl("MA", test_id)) %>% 
+  dplyr::select(school_year, test_id) %>% group_by(school_year) %>% 
+  count(test_id) %>% spread(school_year, n)
+
+stu_test %>% filter(grepl("RD", test_id)) %>% 
+  dplyr::select(school_year, test_id) %>% group_by(school_year) %>% 
+  count(test_id) %>% spread(school_year, n)
+
+```
+
+Here we see that there are very few 10th grade scores for the tests with the MA and RD prefixes, though there are subject specific tests such as GEOM and ENGL which likely correspond to upper grade level math and ELA courses. Check the distribution of MA and RD tests by year. 
+
+The counts for MA03 and RD03 are consistent with counts for other grades, which suggests that the RD3P and MA3P are additional tests, rather than substitutes, if they in fact correspond to 3rd grade tests. Check the months when the tests occur.
+
+```{r checkpretests}
+tests_to_check <- c("RD3P", "RD03", "MA3P", "MA03")
+
+stu_test %>% filter(test_id %in% tests_to_check) %>% 
+  ungroup %>% # dplyr saves grouping information from call to call, so you will need to periodically 
+  # unset the group if you do not want your analysis done by that group
+  dplyr::select(test_date, test_id) %>% table
+```
+
+It looks like the "3P" tests are beginning of year pre-tests; make a note toyourself to verify this. This table helps us identify two types of tests thatare not like the others. First, the `MA3P` and `RD3P` tests are always given ona different date than all of the other tests. This is a beginning of the yeartest (occurring in September). For our analysis, we are only interested insummative end-of-year tests so we should drop these observations. Second, veryfew `MA10` or `RD10` observations are observed -- the counts are much lower thanfor all other tests. It is likely these observations represent a specialpopulation, and they aren't available consistently across test dates anyway - solet's drop them as well.
+
+An easy way to restrict the sample from here is to make a variable that holds the values of the `test_id` we want to retain:
+
+```{r deselecttests}
+keep_tests <- c("MA03", "MA04", "MA05", "MA06", "MA07", "MA08", 
+                "RD03", "RD04", "RD05", "RD06", "RD07", "RD08")
+
+# Start with 407,498
+stu_test <- stu_test[stu_test$test_id %in% keep_tests, ]
+# 210,397 records dropped
+```
+
+This code uses the `%in%` operator, which will only retain values of `test_id` that match any element of our `keep_tests` vector. This is a handy function for looking up elements of one vector in key set of other vectors. 
+
+We can simplify things even further because the grade level for the `MA` and `RD` tests is already encoded as the `grade` variable in our data. So we can make the `test_id` variable now just represent the subject, allowing us to group our data by mathematics or reading assessment across grades. 
+
+```{r checksubjvar}
+stu_test$subject <- substr(stu_test$test_id, 1, 2)
+table(stu_test$subject)
+```
+
+We're getting very close to being able to reshape the test score data so that there is one record per student and year, with math and reading scores for each year. However, we haven't dealt with possible cases where students took more than one type of reading or math test (i.e., multiple tests for the same subject but for different grade levels) in a given year. We also don't know if there are any students who took tests for different subjects at different grade levels. To help with these last checks and get the data ready for reshaping, parse the test ID to define variables for test grade level and test subject. 
+
+Check for cases of students taking a test in multiple grades. There is only one such case--one student took both 7th and 8th grade math tests along with a 7th grade reading test.
+
+```{r countmutltests}
+stu_test %>% group_by(sid, school_year) %>% 
+  mutate(count = n_distinct(test_id)) %>% 
+  filter(count > 2) %>% as.data.frame %>% print
+```
+
+If there were many cases like this, we might want to merge the test data with student enrollment data to get the students' actual enrolled grades. However, only one record needs to be dropped. Decide to keep the test score for the lower grade, since that will lead to the student having the same grade level for reading and math. 
+
+```{r dropmultitests}
+stu_test <- stu_test %>% group_by(sid, school_year) %>% 
+  mutate(keep = if_else(grade == min(grade), 1, 0)) %>% 
+  ungroup %>% filter(keep == 1) %>% as.data.frame
+```
+
+Finally, are there any cases of students with math and ELA tests for different grade levels? If so, we might need to have separate variables for math test grade level and ELA test grade level after reshaping the data, at least until the test scores have been standardized by grade and year.Fortunately there are no such instances - all students have only one value of the non-tested grade. 
+
+```{r checktestgrades}
+stu_test %>% group_by(sid, school_year) %>% 
+  summarize(nvals_tg = n_distinct(grade)) %>% 
+  pull(nvals_tg) %>% table
+```
+
+Now, let's run through some final checks and review what observations we have and do not have: 
+First, check how many tests we have per student and school year: 
+
+```{r perstuperyeartests}
+stu_test %>% group_by(sid, school_year) %>% 
+  summarize(n_tests = n()) %>% 
+  pull(n_tests) %>% table
+```
+
+Most students have two tests, and some students only have one. Students with one may be something we wish to review sometime. But for now, let's proceed to look at what our lag looks like. 
+
+Now we are able to compute a `lag()` - which also helps us check how many students have scores in two consecutive grades of a test. To do this, we'll use the powerful `lag()` function in `dplyr` to get the value of a variable that appears a row prior to the row we are looking at. When used in combination with `group_by()`, `lag()` allows us to instantaneously express and execute complicated lag structures in assessment data.
+
+The `lag()` function has three important arguments. By default, `lag()` will take the row immediately prior (above) the current row for the variable you specify - but `lag()` respects groups so it will only find rows belonging to the same group `sid` and `subject`. We can tell `lag()` how many "periods" to lag, the default is 1. We can also tell `lag()` which variable defines the `lag` - if it is different than the order of the rows. In this case, we use `arrange()` to support the observations within each group by grade in ascending order, so we do not need to specify the order. But, we could choose to calculate the lag by `school_year` instead - in that case we would use `lag(grade, 1, order_by = school_year)`. 
+
+```{r checklagtests}
+stu_test %>% group_by(sid, subject) %>% 
+  arrange(grade) %>% 
+  mutate(py_test = if_else(grade == lag(grade) + 1, 1, 0)) %>% 
+  pull(py_test) %>% table(useNA = "always")
+```
+
+So we have two important things to consider here. First, 76,308 observations have a missing value when checking for a prior-year test using our lagged grade method. This makes sense, the majority of these will be students who are either in grade 3, or in the first year of our testing window. 
+
+The `0` code is curious as it tells us that students have a prior year grade level for an assessment record in that subject, but it does not equal 1 - the current year. These observations are worth inspecting. If we just inspect the the observations with a 1 for `py_test` though, we'll only see the observation that is incorrect, not the prior year observation so we can diagnose what went wrong. To do that, we want to pull the entire test records for students with any unusual grade progression pattern so we can review them. 
+
+To do this, let's calculate a flag variable that is 1 if a student has an abnormal grade progression pattern (the distance between grade and grade_lag is not 1). Let's view these observations. Here, we tell `lag()` to fill in the `default=0` so where a `lag()` returns nothing, we will put a 0 instead of an `NA` value which makes our next set of computations subtracting the `lag_grade`. 
+
+```{r checkabnormalgradeprogression}
+stu_test <- stu_test %>% group_by(sid, subject) %>% 
+  arrange(grade) %>% 
+  mutate(lag_grade = lag(grade, default = 0)) %>% 
+  mutate(grade_delta = grade - lag_grade) %>% 
+  mutate(grade_flag = ifelse(grade_delta != 1, 1, 0))
+
+View(stu_test[stu_test$grade_flag == 1 & !is.na(stu_test$grade_flag),])
+```
+
+The patterns here are about what we would expect - we have students who skip a grade or two, students who have a period of grades/school years where they do not appear in the data, and we have students who disappear from our records. Let's visually inspect this by first creating a lagged score variable, and then looking at how our observations look:
+
+```{r createlagscore}
+stu_test <- stu_test %>% group_by(sid, subject) %>% 
+  dplyr::select(-grade_delta, -grade_flag) %>% # drop unused vars
+  arrange(grade) %>% # arrange by grade
+  mutate(score_lag = lag(score, 1))  # lag the score, the score will be lagged by grade now
+```
+
+
+```{r visualinspectscore}
+# Visually inspect the lag and sorting of the data
+stu_test %>% arrange(sid, subject, grade) %>% 
+  dplyr::select(sid, subject, grade, lag_grade, score, score_lag, test_id) %>% 
+  View()
+```
+
+To calculate leads instead of lags you can use the `dplyr::lead()` function instead. For more complex operations like moving averages you can consult some of the other summary functions available in the `dplyr` package as well. 
+
+
+## Define Your Analytic Sample
+
+Our final step in cleaning our data is to decide which observations and columns belong in the sample we are using for our analysis. While cleaning the data, we want to be very careful about discarding rows and columns because we may need information in those rows and columns to inform the cleaning process. But, now that we have completed our cleaning process, it is time to asses the data and determine what parts of the data are necessary and useful for our analytic tasks. 
+
+It's a good idea to save this step to this stage for two reasons. First, cleaning the data has given us a much better sense of the data we are working with. If we had excluded some of the data from the cleaning process, some of the quirks we found in the data may have been hidden from us, giving us a weaker intuition about the data. Second, very few analysis plans survive first contact with data - so by cleaning the data as well as possible upfront, we can adapt our analysis plan without having to repeat so much data cleaning work. The upfront investment allows us to be more nimble and responsive when it comes to the analysis part of the work. 
+
+Fortunately defining our analytic sample is easy. At this point we want to return to the research question we are seeking to answer and evaluate which data elements are sufficiently high quality and relevant to that question. Then we can perform some basic checks on the final sample before we proceed. 
+
+Let's look at the columns we want to retain: 
+
+```{r varnames}
+names(stu_test)
+```
+
+Let's assume for our analysis, we only care about the student level score, lag, by subject and grade, with a school level control: 
+
+```{r retainsomevars}
+keep_vars <- c("sid", "school_year", "subject", "grade", "score", "score_lag", "ach_level", "schid")
+stu_test <- as.data.frame(stu_test[, keep_vars])
+head(stu_test)
+```
+
+Now let's think about rows we want to drop:
+
+```{r checkdataleft}
+stu_test <- stu_test %>% arrange(sid, subject, grade) 
+head(stu_test)
+
+```
+
+Remember our analysis will drop all rows with missing data. First of all, we know we will lose every row in the first year - so let's drop those rows. We know we cannot observe a test score prior to 2006.
+
+```{r dropfirstyearofdatawithnolag}
+nrow(stu_test)
+nrow(stu_test[stu_test$school_year > 2006,])
+stu_test <- filter(stu_test, school_year > 2006)
+```
+
+We dropped 36,252 records here, but that is unavoidable!
+
+Let's see how many rows we will lose and how many unique students we will lose now:
+
+```{r measurerowsdropped}
+# Current rows
+nrow(stu_test)
+# Complete
+nrow(na.omit(stu_test))
+# Rows dropped
+nrow(stu_test) - nrow(na.omit(stu_test))
+```
+
+We lose another 40k+ rows by dropping all incomplete rows. 
+
+Complete student IDs
+
+```{r measuresstudentsdropped}
+# Current students
+n_distinct(stu_test$sid)
+# Complete
+n_distinct(na.omit(stu_test)$sid)
+# Students dropped
+n_distinct(stu_test$sid) - n_distinct(na.omit(stu_test)$sid) 
+
+```
+
+So about 20% of students in our sample do not have two consecutive test scores. At this point, we may wish to go back if this is not acceptable, and compare students who will be dropped against students who are retained and look for differences in other student attributes. 
+
+At this point, we have determined that this data is good enough to continue with. So we can go ahead and drop the rows using `na.omit()` which drops every row with any NA in any column.
+
+```{r drop}
+stu_test <- na.omit(stu_test)
+```
+
+Our end result is this data:
+
+```{r evaluatecleandata}
+nrow(stu_test)
+names(stu_test)
+summary(stu_test)
+```
+
+
+## Save the Cleaned Data File
+
+Finally, save your cleaned test score file. Here we save the data in the `.rda` R format. You could also export the data as `.csv` or to another format for another statistical software. One advantage of the `rda` or `RData` format is you can save multiple objects together. Here we save the cleaned student test data and the school data together.
+
+```{r checkexport, eval=FALSE}
+save(stu_test, sch_test, file = "data/test_scores_clean.rda")
+```
+
+
+## Further Resources
+
+This syntax guide is an introduction to the world of data cleaning code, but as data cleaning tasks make up the majority of our time as an analyst, it is not exhaustive. As you work on your project and encounter new data cleaning challenges - ask for help on Slack and advice about how to proceed. To get you started, here are some R packages and data cleaning tools you might find helpful depending on the data you are using and the work you are doing:
+
+- `janitor` - a package that streamlines cleaning data in R that was imported from Excel
+- `lubridate` - a package that makes working with date/time data in R much easier 
+- `stringr` - a package for working with text data
+
+### A Note on Excel
+
+Excel can be particularly challenging to bring data into and out from in a consistent way, due in part to Excel's desire to convert many types of data to dates. You should look at the `janitor` package and the excellent `readxl` package - both of which have good documentation and guides on how to use them to import complicated Excel data into R programatically and efficiently.
+
+
+### My Workflow
+
+My personal go-tos when I have a data cleaning project are: 
+
+- `dplyr` for basic data reshaping and aggregation
+- `lubridate` for any time the data I am working with has dates
+- `stringr` for splitting up and combining text labels
+
+### Advice
+
+This choice demonstrates three data cleaning truisms. First, you are often faced with making a trade off between losing some information and developing a tractable dataset. Second, education data is of varying, and often poor, quality. The timeline for your analysis project is probably shorter than the timeline for improving data governance, data collection, and data management in your organization. Nonetheless, even imperfect data can yield meaningful and actionable information, and using that data in analysis will help to create the demand for better-quality data over time. And third, it's always a good idea to learn as much as you can about the data you are working with from others who know it better. You may not be able to get answers right away, though, so you should comment and organize your cleaning code so that you can modify it easily when or if you learn more about the data, and re-run it easily if you receive updated data.
