@@ -1025,12 +1025,7 @@ This pattern is helpful, but it doesn't tell us what to do with the duplicates n
 
 At this point you should reach out to the district's assessment department to discover why there areso many near-duplicate records, but getting an answer to your query will take time, and might notfully resolve the issue. Should you ask for a new data pull? You could consider doing so. But the"extra" near-duplicate records make up only ~1.2 percent of the total records (5574/448362).
 
-If you believe that most of the student data is accurate, having inaccurate data 
-for one or two percent of your dataset is unlikely to bias your results if you 
-are interested in analyzing patterns in the data rather than developing 
-individual accountability results. Rather than calling a halt to the data 
-cleaning work, it makes sense to proceed by applying a decision rule to choose 
-a single test score record in cases where there are near-duplicates. 
+If you believe that most of the student data is accurate, having inaccurate data for one or two percent of your dataset is unlikely to bias your results if you are interested in analyzing patterns in the data rather than developing individual accountability results. Rather than calling a halt to the data cleaning work, it makes sense to proceed by applying a decision rule to choose a single test score record in cases where there are near-duplicates. 
 
 Before starting to apply decision rules to pick specific test instances, let's perform a final check to see if there are any cases where the test scores, test IDs, and test dates 
 are all the same, and some other variable is different. In this case, let's check out if students have two tests on the same date but with different scores:
